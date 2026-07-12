@@ -127,80 +127,30 @@ Set `INCLUDE_HEADER = False` to write just the text.
 
 ## Advice and gotchas
 
-The things that actually mattered, most of them learned by burning an IP or two:
+The stuff that actually mattered:
 
-- The `timedtext` caption endpoint is the bottleneck, and its rate limit is per
-  IP and shared. Not per account, not per cookie, per egress IP. When you trip
-  it, captions stop rendering in the browser on that IP too, which is how you can
-  tell it's the IP and not your code. Slower is simply safer; no header trick
-  buys you more throughput.
+- The `timedtext` caption endpoint is the whole problem. Its rate limit is per
+  egress IP and shared, so when you trip it captions stop rendering in the
+  browser on that IP too, not just in your script. Slower is just safer; no
+  header trick buys you more throughput.
 
-- Separating egress is worth more than any timing trick. One IP at 35/hr is much
-  safer than one IP at 70/hr with cleverer jitter. Two different IPs at 35/hr
-  each give you 70/hr total while each stays in the safe zone. The move is to add
-  IPs, not to raise the rate.
+- Add IPs, don't crank the rate. Two different egress IPs at 35/hr each is far
+  safer than one IP at 70/hr. Two sources that land on the *same* IP silently
+  share the limit, so the tool probes each egress at startup and warns loudly if
+  two collide.
 
-- Two sources that land on the same egress IP quietly share the limit, which
-  defeats the purpose. It's an easy mistake to make: a VPN whose exit is your own
-  residential IP, or a "tether" that silently fell back to the default route. At
-  startup each source probes its real egress through the bind (via
-  `api.ipify.org`) and prints a loud warning if two of them match. Watch for it.
+- Cookieless is safer on a clean IP. Only reach for cookies if you actually hit
+  "Sign in to confirm you're not a bot", and even then only on a safe egress.
 
-- Cookieless is safer on a clean IP. Only add cookies if you actually get "Sign
-  in to confirm you're not a bot", and even then only on a safe egress. Logged-in
-  sessions sometimes get offered only SABR / PO-token formats this build can't
-  use ("Requested format is not available"), and they tie your account to the
-  fetch. Leave `COOKIES_BROWSER` empty unless you're forced off it.
+- Once an IP is caption-banned, treat it as gone; ours never came back clean.
+  Start a new IP low (10-20/hr), confirm it's clean, then ramp up to ~35/hr.
 
-- Phone-hotspot IPs change when they reconnect, which is why `auto:Wi-Fi` re-reads
-  the adapter's live address every launch instead of pinning a lease. If a tether
-  drops and comes back on a different IP mid-run, the source heals itself: after
-  `DOWN_LIMIT` network errors it re-probes and adopts the new bind instead of
-  retiring.
+- Network hiccups (dead tether, timeout, DNS) are never "no captions"; those get
+  requeued, and only real block/ban states count against a source. Hotspot IPs
+  also change on reconnect, so `auto:Wi-Fi` re-reads the live address each launch.
 
-- Don't let a network error look like "no captions". A dead tether, a timeout, a
-  DNS failure, a reset connection: those are transient, the video is fine, your
-  link died. Permanent-skip on those and you'll quietly lose hundreds of good
-  videos. The classifier checks for blocked and transient states before it ever
-  reaches "no captions", and transient failures get requeued rather than marked
-  done. Only an egress that is confirmed down retires a source, and its queued
-  videos go back to the healthy ones.
-
-- The circuit breaker is there to protect the IP, not the run. After
-  `BREAKER_LIMIT` blocks in a row, a source retires itself and hands its work
-  back, instead of pounding an IP that's already being throttled. Let it. Pushing
-  through a soft block is how you turn it into a hard ban.
-
-- Once an IP is caption-banned, assume it's gone. In our runs a hard-banned IP
-  never came back verifiably clean. Drop confirmed-banned IPs into `FORBID_IPS`
-  so the tool won't even probe through them.
-
-- Pure `length` seeding is a trap, especially on Windows. Seed the jitter only
-  from the previous video's length and it's reproducible, so two videos of the
-  same length produce the same gap, which is a pattern. Worse, `time.time_ns()`
-  is only about 15 ms granular on Windows and collides on back-to-back calls,
-  which quietly rebuilds a fixed cadence. `SEED_MODE="mixed"` folds in
-  `os.urandom` so the sequence never repeats. Leave it on `mixed`.
-
-- `json3` is the caption format worth parsing. YouTube offers it for basically
-  every track and its timing is clean. The fallback strips roll-up duplicate
-  lines (roll-up captions repeat the previous line and then add to it). VTT and
-  srv3 are only touched as a last resort.
-
-- Titles and channels come from oEmbed, a separate endpoint that rarely
-  throttles. One light call gives you both, so metadata lookups don't eat your
-  caption budget. `dump_channel` and `migrate_channels` lean on the browse and
-  oEmbed endpoints for the same reason.
-
-- Start low and ramp up. We ran new sources around 10-20/hr while confirming the
-  IP was clean, then moved up to about 35/hr. If a fresh IP takes a block early,
-  drop it back; the first hour on a new IP is the most fragile.
-
-- Keep `_done.txt`. It's the resume file and the reason the whole thing is
-  idempotent. Dump in thousands of links, kill the run, come back tomorrow, and
-  it picks up only what's left. (`migrate_channels.py` is a one-off backfill for
-  transcripts grabbed before the per-channel-folder layout existed; ignore it
-  unless you have old flat output lying around.)
+- Keep `_done.txt`. It's the resume file that makes re-runs skip whatever's
+  already grabbed.
 
 ---
 
