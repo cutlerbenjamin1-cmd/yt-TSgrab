@@ -1,0 +1,13 @@
+# yt-grab input - one YouTube URL per line.
+#
+#   * Blank lines and lines starting with # are ignored.
+#   * Any URL shape works: watch?v=, youtu.be/, shorts/, live/, embed/,
+#     or a bare 11-character video ID.
+#   * Already-grabbed videos (tracked in _done.txt) are skipped automatically,
+#     so you can keep appending links and re-running - it only fetches new ones.
+#   * Tip: run  dump_channel.bat <channel-url>  to generate a paste-ready
+#     channel_<handle>.txt, then drop the lines you want in below.
+#
+# This file is just an example. Replace the two lines below with your own.
+https://www.youtube.com/watch?v=dQw4w9WgXcQ
+https://youtu.be/aqz-KE-bpKQ

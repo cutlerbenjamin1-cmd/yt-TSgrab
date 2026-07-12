@@ -1,0 +1,21 @@
+# yt-grab runtime output + state - never commit these
+transcripts/
+_transcripts_bak/
+_done.txt
+_done.txt.bak
+_harvest.log
+_STOP
+
+# channel dumps are regenerable and often personal - keep them local
+channel_*.txt
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# NOTE: links.txt is committed as a small example. If you fill it with a
+# large / private list of your own, either keep the example name and accept
+# it's tracked, or rename yours (e.g. my_links.txt) and point INPUT_FILE at it.
