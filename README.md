@@ -228,5 +228,4 @@ partly just about not being a nuisance.
 
 ## License
 
-No license yet. Add one (MIT is a reasonable default) before you count on anyone
-else reusing it.
+MIT. See [LICENSE](LICENSE). Use it however you want.
