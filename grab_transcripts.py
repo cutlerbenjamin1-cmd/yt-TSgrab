@@ -69,6 +69,7 @@ FORBID_IPS          = []
 INPUT_FILE          = "links.txt"
 OUTPUT_DIR          = "transcripts"
 DONE_FILE           = "_done.txt"
+AGE_FILE            = "_age_restricted.txt"   # age-gated videos land here (skipped, never retried)
 LOG_FILE            = "_harvest.log"
 INCLUDE_HEADER      = True         # write a small provenance header atop each .txt
 MAX_VIDEOS          = 0            # 0 = no limit; else stop after N successful grabs this run
@@ -119,6 +120,11 @@ class NoCaptionsError(Exception):
 class TransientError(Exception):
     """Network / egress failure (tether dropped, timeout, connection refused,
     DNS). NOT the video's fault - never permanent-skip; requeue and retry."""
+
+
+class AgeRestrictedError(Exception):
+    """Video needs age confirmation - captions unreachable without an
+    authenticated session. Permanent skip; also logged to its own file."""
 
 
 # --------------------------------------------------------------------------
@@ -211,6 +217,13 @@ def extract_video_id(url_or_id: str):
 # --------------------------------------------------------------------------
 def classify_error(exc: Exception) -> str:
     blob = (type(exc).__name__ + " " + str(exc)).lower()
+    # Age gate FIRST: its message ("Sign in to confirm your age") collides with
+    # the bot-check keyword "sign in to confirm" below, so it must win before it
+    # or an age-restricted video is mis-flagged as an IP block (breaker trip +
+    # endless requeue). This is a permanent skip, not a block.
+    if any(k in blob for k in ("confirm your age", "inappropriate for some users",
+                               "age restricted", "age-restricted", "agerestricted")):
+        return "age_restricted"
     # Rate limit / bot-check FIRST (trips the breaker, never a skip).
     if any(k in blob for k in ("ipblocked", "requestblocked", "too many request",
                                "429", "sign in to confirm", "not a bot", "ratelimit",
@@ -235,7 +248,7 @@ def classify_error(exc: Exception) -> str:
                                "no element found", "no captions")):
         return "no_transcript"
     if any(k in blob for k in ("unavailable", "private", "removed",
-                               "invalidvideoid", "agerestricted", "unplayable")):
+                               "invalidvideoid", "unplayable")):
         return "unavailable"
     return "error"
 
@@ -345,8 +358,11 @@ def fetch_fallback(vid: str, ip: str):
         with yt_dlp.YoutubeDL(_ytdlp_opts(ip)) as ydl:
             info = ydl.extract_info(url, download=False) or {}
     except DownloadError as e:
-        if classify_error(e) == "blocked":
+        k = classify_error(e)
+        if k == "blocked":
             raise BlockedError(str(e))
+        if k == "age_restricted":
+            raise AgeRestrictedError(str(e)[:140])
         return None
     sub_url, ext, is_auto = _pick_sub_url(info)
     if not sub_url or ext != "json3":
@@ -396,12 +412,14 @@ def fetch_one(vid: str, ip: str) -> dict:
             raise BlockedError(str(e))
         if kind == "transient":
             raise TransientError(f"{type(e).__name__}: {str(e)[:140]}")
+        if kind == "age_restricted":
+            raise AgeRestrictedError(str(e)[:140])
         # Not blocked/transient: try the heavier yt-dlp path (also gives
         # title+channel). Guard it so a connectivity failure THERE is reported
         # as transient (retry), not as "no captions" (permanent skip).
         try:
-            fb = fetch_fallback(vid, ip)   # may raise BlockedError
-        except BlockedError:
+            fb = fetch_fallback(vid, ip)   # may raise BlockedError / AgeRestrictedError
+        except (BlockedError, AgeRestrictedError):
             raise
         except Exception as fe:
             raise TransientError(f"{type(fe).__name__}: {str(fe)[:140]}")
@@ -524,6 +542,32 @@ def mark_done(path: Path, vid: str, note: str):
     ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
     with path.open("a", encoding="utf-8") as f:
         f.write(f"{vid}\t{note}\t{ts}\n")
+
+
+def record_age_restricted(age_path: Path, url: str, vid: str):
+    ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    new = not age_path.exists()
+    with age_path.open("a", encoding="utf-8") as f:
+        if new:
+            f.write("# yt-grab: videos skipped - they require age confirmation "
+                    "(captions unreachable without an authed session).\n"
+                    "# Comment lines are ignored by links.txt; the URLs are paste-ready.\n\n")
+        f.write(f"# age-restricted  {ts}  (from: {url})\n")
+        f.write(f"https://www.youtube.com/watch?v={vid}\n\n")
+
+
+def load_age_ids(path: Path) -> set:
+    if not path.exists():
+        return set()
+    out = set()
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        v = extract_video_id(s)
+        if v:
+            out.add(v)
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -674,7 +718,7 @@ def _probe_down(src):
     return down, eg
 
 
-def _run_source(src, q, out_dir, done_path, done_lock, stats, stat_lock):
+def _run_source(src, q, out_dir, done_path, done_lock, stats, stat_lock, age_path, age_seen):
     """One source's worker loop: claim from the shared queue, fetch on its own
     bound egress, on its own cadence, with its own breaker + down-detection.
     A network failure (dead tether) is NEVER a permanent skip - the video is
@@ -749,6 +793,20 @@ def _run_source(src, q, out_dir, done_path, done_lock, stats, stat_lock):
                 slog(src.name, "no captions (%s) - skip permanently", e)
                 pace()
                 continue
+            except AgeRestrictedError:
+                with done_lock:
+                    mark_done(done_path, vid, "skip:age_restricted")
+                    if vid not in age_seen:
+                        age_seen.add(vid)
+                        record_age_restricted(age_path, url, vid)
+                with stat_lock:
+                    stats["age_restricted"] += 1
+                src.skipped += 1
+                breaker = 0
+                consec_net = 0
+                slog(src.name, "age-restricted - skip permanently (logged to %s)", age_path.name)
+                pace()
+                continue
             except Exception as e:
                 # anything unclassified - treat as network/transient, never skip
                 if handle_net(url, vid, "ERR", f"{type(e).__name__}: {e}"):
@@ -811,12 +869,15 @@ def main() -> int:
 
     done_lock = threading.Lock()
     stat_lock = threading.Lock()
-    stats = {"grabbed": 0, "skipped": 0}
+    stats = {"grabbed": 0, "skipped": 0, "age_restricted": 0}
+    age_path = BASE / AGE_FILE
+    age_seen = load_age_ids(age_path)
 
     threads = []
     for s in active:
         t = threading.Thread(target=_run_source, name=s.name, daemon=True,
-                             args=(s, q, out_dir, done_path, done_lock, stats, stat_lock))
+                             args=(s, q, out_dir, done_path, done_lock, stats,
+                                   stat_lock, age_path, age_seen))
         t.start()
         threads.append(t)
 
@@ -840,8 +901,8 @@ def main() -> int:
     for s in active:
         log.info("[%s] grabbed %d | skipped %d | blocks %d | net-errors %d",
                  s.name, s.grabbed, s.skipped, s.blocks, s.transient)
-    log.info("TOTAL grabbed %d | skipped %d | remaining ~%d%s",
-             stats["grabbed"], stats["skipped"], q.qsize(),
+    log.info("TOTAL grabbed %d | skipped %d | age-restricted %d | remaining ~%d%s",
+             stats["grabbed"], stats["skipped"], stats["age_restricted"], q.qsize(),
              f" | stopped: {stopped}" if stopped else "")
 
     stop_file = BASE / "_STOP"

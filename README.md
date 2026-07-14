@@ -21,6 +21,9 @@ built around staying under that limit.
   short header and the caption text reflowed to 100 columns.
 - Records finished video IDs in `_done.txt`, so a re-run skips whatever it
   already has. Keep appending links and re-running; it only fetches the new ones.
+- Skips age-restricted videos instead of retrying them (their captions need a
+  signed-in, age-confirmed session) and lists each one in `_age_restricted.txt`,
+  a paste-ready record you can revisit later.
 - Splits the work across one or more egress sources (a phone tether, a
   residential line, a VPN), each with its own IP, hourly budget, timing and
   circuit breaker, so no two of them share a rate limit.
@@ -166,8 +169,8 @@ The stuff that actually mattered:
 | `links.txt`           | Your input list (an example is included).                  |
 | `requirements.txt`    | Python dependencies.                                       |
 
-Runtime output (`transcripts/`, `_done.txt`, `_harvest.log`, `channel_*.txt`)
-is git-ignored.
+Runtime output (`transcripts/`, `_done.txt`, `_age_restricted.txt`,
+`_harvest.log`, `channel_*.txt`) is git-ignored.
 
 ## Responsible use
 
