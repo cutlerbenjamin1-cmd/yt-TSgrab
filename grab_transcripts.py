@@ -501,6 +501,7 @@ def write_transcript(out_dir: Path, vid: str, res: dict) -> Path:
             f"URL: https://www.youtube.com/watch?v={vid}",
             f"Duration: {fmt_hms(res['length'])}",
             f"Captions: {'auto-generated' if res['is_generated'] else 'manual'} (via {res['source']})",
+            f"CaptionType: {'auto' if res['is_generated'] else 'manual'}",
             f"Fetched: {datetime.now(timezone.utc).isoformat(timespec='seconds')}",
             "",
         ]

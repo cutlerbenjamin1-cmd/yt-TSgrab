@@ -119,6 +119,7 @@ Channel: <channel name>
 URL: https://www.youtube.com/watch?v=<id>
 Duration: H:MM:SS
 Captions: auto-generated|manual (via ytt|yt-dlp)
+CaptionType: auto|manual
 Fetched: <ISO-8601 UTC>
 
 <caption text, punctuation as YouTube provides it, reflowed to 100 cols>
