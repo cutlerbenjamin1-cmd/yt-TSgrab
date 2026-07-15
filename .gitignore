@@ -1,5 +1,6 @@
 # yt-grab runtime output + state - never commit these
 transcripts/
+repaired/
 _transcripts_bak/
 _done.txt
 _done.txt.bak
